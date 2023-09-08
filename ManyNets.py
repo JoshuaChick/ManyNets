@@ -12,9 +12,9 @@ import os
 
 #################### CONSTANTS ####################
 EPOCHS = 10
-# Max 60,000 (e.g. 10000 means 10000 images will be used for training each separate net)
-NUM_TRAINING_IMGS = 500
-BATCH_SIZE = 100
+# Max 60,000 (e.g. 10000 means 10000 images will be used for training each separate net, per epoch)
+NUM_TRAINING_IMGS = 10000
+BATCH_SIZE = 10
 NUM_IN_PAINT_EXAMPLES = 10
 NUM_PIXELS_IN_IMAGE = 784
 # Starting at 0
@@ -57,29 +57,27 @@ class CroppedMnistDatasetTrain(Dataset):
     def __init__(self, pixels):
         mnist_train = datasets.MNIST(root='./', train=True, transform=transforms.ToTensor(), download=True)
 
-        mnist_train_cropped_imgs = torch.zeros([len(mnist_train), pixels], dtype=torch.float32).to(device)
-        mnist_train_next_pixel_one_hots = torch.zeros([len(mnist_train), 256], dtype=torch.float32).to(device)
-
         self.mnist_train_cropped_imgs_capped = torch.zeros([NUM_TRAINING_IMGS, pixels], dtype=torch.float32).to(device)
         self.mnist_train_next_pixel_one_hots_capped = torch.zeros([NUM_TRAINING_IMGS, 256], dtype=torch.float32).to(device)
 
+        # Selects random index to start at.
+        random_start_idx = random.randint(0, len(mnist_train) - NUM_TRAINING_IMGS - 1)
+
         for idx, (image, label) in enumerate(mnist_train):
-            mnist_train_cropped_imgs[idx] = image.view(784)[:pixels]
+            if idx < random_start_idx:
+                continue
+
+            if idx == random_start_idx + NUM_TRAINING_IMGS:
+                break
+
+            # Capped as it is not the whole dataset, only NUM_TRAINING_IMGS long
+            index_for_capped_data = idx - random_start_idx
+
+            self.mnist_train_cropped_imgs_capped[index_for_capped_data] = image.view(784)[:pixels]
 
             next_pixel = image.view(784)[pixels].to(device)
             next_pixel_0_255 = convert_0_1_to_0_255(float(next_pixel))
-            mnist_train_next_pixel_one_hots[idx] = f.one_hot(torch.tensor(next_pixel_0_255), 256).float().to(device)
-
-        # Selects NUM_TRAINING_IMGS of random examples
-        possible_indexes = [k for k in range(len(mnist_train_cropped_imgs))]
-
-        for counter in range(NUM_TRAINING_IMGS):
-            # Picks an index, then removes it, so it cannot be chosen again
-            random_index = possible_indexes[random.randint(0, len(possible_indexes) - 1)]
-            possible_indexes.remove(random_index)
-
-            self.mnist_train_cropped_imgs_capped[counter] = mnist_train_cropped_imgs[random_index]
-            self.mnist_train_next_pixel_one_hots_capped[counter] = mnist_train_next_pixel_one_hots[random_index]
+            self.mnist_train_next_pixel_one_hots_capped[index_for_capped_data] = f.one_hot(torch.tensor(next_pixel_0_255), 256).float().to(device)
 
     def __len__(self):
         return len(self.mnist_train_cropped_imgs_capped)
@@ -144,20 +142,8 @@ else:
         sys.exit()
 
 
-#################### INSTANTIATE TRAIN DATASETS AND DATALOADERS ####################
-# NOTE: due to memory constraints train dataset and loader is created during training
-
-# train_loaders = []
-#
-# # There will be one loader per net, so 'for i in range(TOTAL_NUM_NETS):' is fine
-# for i in range(TOTAL_NUM_NETS):
-#     train_dataset = CroppedMnistDatasetTrain(INDEX_FIRST_PIXEL_TO_PREDICT + i)
-#     num_batches = len(train_dataset) / BATCH_SIZE
-#     train_loaders.append(DataLoader(train_dataset, shuffle=True, batch_size=BATCH_SIZE))
-#
-#     print(f'{(i + 1) / TOTAL_NUM_NETS * 100:.2F}% loading training data...', end='\r')
-#
-# print('')
+#################### NOTE ON TRAINING DATASETS AND DATALOADERS ####################
+# NOTE: due to memory constraints train datasets and loaders are created during training
 
 
 #################### INSTANTIATE TEST DATASET AND DATALOADER ####################
