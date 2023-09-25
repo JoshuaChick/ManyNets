@@ -14,7 +14,7 @@ import os
 EPOCHS = 50
 TRAINING_DATASET_LENGTH = 60000
 # Max 60,000 (e.g. 10000 means 10000 images will be used for training each separate net, per epoch)
-NUM_TRAINING_IMGS = 10000
+NUM_TRAINING_IMGS = 20000
 BATCH_SIZE = 50
 NUM_IN_PAINT_EXAMPLES = 10
 NUM_PIXELS_IN_IMAGE = 784
@@ -121,7 +121,7 @@ class Net(nn.Module):
         super().__init__()
         self.l1 = nn.Linear(in_nodes, 400, dtype=torch.float32)
         self.conv1 = nn.Conv2d(in_channels=1, out_channels=256, kernel_size=(4, 4), stride=4, dtype=torch.float32)
-        self.l2 = nn.Linear(64 * 5 * 5, out_nodes, dtype=torch.float32)
+        self.l2 = nn.Linear(256 * 5 * 5, out_nodes, dtype=torch.float32)
 
     def forward(self, x):
         x = self.l1(x)
