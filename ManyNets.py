@@ -10,19 +10,21 @@ import sys
 import os
 
 
-#################### CONSTANTS ####################
-EPOCHS = 10
+#################### CONSTANTS / VARIABLES ####################
+EPOCHS = 50
+TRAINING_DATASET_LENGTH = 60000
 # Max 60,000 (e.g. 10000 means 10000 images will be used for training each separate net, per epoch)
 NUM_TRAINING_IMGS = 10000
-BATCH_SIZE = 10
+BATCH_SIZE = 50
 NUM_IN_PAINT_EXAMPLES = 10
 NUM_PIXELS_IN_IMAGE = 784
-# Starting at 0
-INDEX_FIRST_PIXEL_TO_PREDICT = 392
+INDEX_FIRST_PIXEL_TO_PREDICT = 448
 TOTAL_NUM_NETS = NUM_PIXELS_IN_IMAGE - INDEX_FIRST_PIXEL_TO_PREDICT
 LR = 0.001
 IMAGE_OUTPUT_PATH = './generated_images/'
 FOLDER_NAME = IMAGE_OUTPUT_PATH.replace("./", "").replace("/", "")
+
+start_index = 0
 
 
 #################### CHECKING CUDA ####################
@@ -54,30 +56,27 @@ class CroppedMnistDatasetTrain(Dataset):
     CroppedMnistDatasetTrain will make an object of cropped mnist digits and the next pixel,
     e.g. the first item may be the first 400 pixels of an image and the 401st pixel as the answer.
     """
-    def __init__(self, pixels):
+    def __init__(self, pixels, start_idx):
         mnist_train = datasets.MNIST(root='./', train=True, transform=transforms.ToTensor(), download=True)
 
         self.mnist_train_cropped_imgs_capped = torch.zeros([NUM_TRAINING_IMGS, pixels], dtype=torch.float32).to(device)
         self.mnist_train_next_pixel_one_hots_capped = torch.zeros([NUM_TRAINING_IMGS, 256], dtype=torch.float32).to(device)
 
-        # Selects random index to start at.
-        random_start_idx = random.randint(0, len(mnist_train) - NUM_TRAINING_IMGS - 1)
-
         for idx, (image, label) in enumerate(mnist_train):
-            if idx < random_start_idx:
+            if idx < start_idx:
                 continue
 
-            if idx == random_start_idx + NUM_TRAINING_IMGS:
+            if idx == start_idx + NUM_TRAINING_IMGS:
                 break
 
             # Capped as it is not the whole dataset, only NUM_TRAINING_IMGS long
-            index_for_capped_data = idx - random_start_idx
+            index_for_capped_data = idx - start_idx
 
-            self.mnist_train_cropped_imgs_capped[index_for_capped_data] = image.view(784)[:pixels]
+            self.mnist_train_cropped_imgs_capped[index_for_capped_data] = image.view(784)[:pixels].to(device)
 
             next_pixel = image.view(784)[pixels].to(device)
             next_pixel_0_255 = convert_0_1_to_0_255(float(next_pixel))
-            self.mnist_train_next_pixel_one_hots_capped[index_for_capped_data] = f.one_hot(torch.tensor(next_pixel_0_255), 256).float().to(device)
+            self.mnist_train_next_pixel_one_hots_capped[index_for_capped_data] = f.one_hot(torch.tensor(next_pixel_0_255), 256).to(device)
 
     def __len__(self):
         return len(self.mnist_train_cropped_imgs_capped)
@@ -107,14 +106,28 @@ class CroppedMnistDatasetTest(Dataset):
 
 
 #################### NET ####################
+# class Net(nn.Module):
+#     def __init__(self, in_nodes, out_nodes):
+#         super().__init__()
+#         self.l1 = nn.Linear(in_nodes, in_nodes, dtype=torch.float32)
+#         self.l2 = nn.Linear(in_nodes, out_nodes, dtype=torch.float32)
+#
+#     def forward(self, x):
+#         x = self.l1(x)
+#         x = self.l2(x)
+#         return f.softmax(x, dim=1)
 class Net(nn.Module):
     def __init__(self, in_nodes, out_nodes):
         super().__init__()
-        self.l1 = nn.Linear(in_nodes, in_nodes, dtype=torch.float32)
-        self.l2 = nn.Linear(in_nodes, out_nodes, dtype=torch.float32)
+        self.l1 = nn.Linear(in_nodes, 400, dtype=torch.float32)
+        self.conv1 = nn.Conv2d(in_channels=1, out_channels=256, kernel_size=(4, 4), stride=4, dtype=torch.float32)
+        self.l2 = nn.Linear(64 * 5 * 5, out_nodes, dtype=torch.float32)
 
     def forward(self, x):
         x = self.l1(x)
+        x = x.view(-1, 1, 20, 20)
+        x = self.conv1(x)
+        x = x.view(-1, 256 * 5 * 5)
         x = self.l2(x)
         return f.softmax(x, dim=1)
 
@@ -144,6 +157,7 @@ else:
 
 #################### NOTE ON TRAINING DATASETS AND DATALOADERS ####################
 # NOTE: due to memory constraints train datasets and loaders are created during training
+# (there is a separate dataset and loader for each net, e.g. one for 392 input pixels, 393, etc...)
 
 
 #################### INSTANTIATE TEST DATASET AND DATALOADER ####################
@@ -170,7 +184,7 @@ for i in range(TOTAL_NUM_NETS):
 for i in range(TOTAL_NUM_NETS):
     net = Net(input_pixels_for_each_net[i], 256).to(device)
 
-    optimizer = optim.Adam(net.parameters(), lr=LR)
+    optimizer = optim.AdamW(net.parameters(), lr=LR)
 
     nets.append(net)
     optimizers.append(optimizer)
@@ -178,8 +192,11 @@ for i in range(TOTAL_NUM_NETS):
 
 #################### TRAINING AND TESTING ####################
 for epoch in range(EPOCHS):
+    if start_index + NUM_TRAINING_IMGS > TRAINING_DATASET_LENGTH:
+        start_index = 0
+
     for i in range(TOTAL_NUM_NETS):
-        train_dataset = CroppedMnistDatasetTrain(INDEX_FIRST_PIXEL_TO_PREDICT + i)
+        train_dataset = CroppedMnistDatasetTrain(INDEX_FIRST_PIXEL_TO_PREDICT + i, start_index)
         num_batches = len(train_dataset) / BATCH_SIZE
         train_loader = DataLoader(train_dataset, shuffle=True, batch_size=BATCH_SIZE)
 
@@ -195,7 +212,10 @@ for epoch in range(EPOCHS):
 
             optimizers[i].step()
 
-        print(f'Epoch {epoch + 1} {(i + 1) / TOTAL_NUM_NETS * 100:.2F}% completed. Loss = {loss}.', end='\r')
+            if torch.isnan(loss):
+                raise Exception('MODEL IS RETURNING NANS')
+
+        print(f'Epoch {epoch + 1} {(i + 1) / TOTAL_NUM_NETS * 100:.2F}% completed.', end='\r')
 
     print('')
 
@@ -206,11 +226,11 @@ for epoch in range(EPOCHS):
 
             for i in range(TOTAL_NUM_NETS):
                 predicted_pixel_brightness = convert_0_255_to_0_1(int(torch.argmax(nets[i](img)[0])))
-                predicted_pixel_brightness = torch.tensor([predicted_pixel_brightness], dtype=torch.float32).to(device)
+                predicted_pixel_brightness = torch.tensor([predicted_pixel_brightness]).to(device)
                 img = torch.cat((img[0], predicted_pixel_brightness)).view(1, INDEX_FIRST_PIXEL_TO_PREDICT + i + 1)
 
             plt.imsave(f'{IMAGE_OUTPUT_PATH}Epoch{epoch + 1}Example{j + 1}.png', img.to(torch.device('cpu')).view(28, 28))
 
-
+    start_index += NUM_TRAINING_IMGS
 
 
